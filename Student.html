@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <script>var APP_URL = "<?= appUrl ?>";</script>
+  <?!= include('Stylesheet'); ?>
+</head>
+<body>
+  <header class="appbar">
+    <h1>🌱 무순 관찰 일지</h1>
+    <div class="user-info">
+      <span id="whoami"></span>
+      <button class="logout" onclick="logout()">로그아웃</button>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="subtabs">
+      <button id="tabWrite" class="active" onclick="switchTab('write')">오늘의 기록</button>
+      <button id="tabMine" onclick="switchTab('mine')">나의 기록</button>
+      <button id="tabClass" onclick="switchTab('class')">같은 반 기록</button>
+    </div>
+
+    <!-- 오늘의 기록 작성 -->
+    <div id="paneWrite">
+      <div class="card" id="alreadyDoneCard" style="display:none;">
+        <h2 class="section-title">오늘의 기록 완료 ✅</h2>
+        <p>오늘의 무순 관찰 기록을 이미 제출했어요. 수고했어요! 내일 다시 만나요.</p>
+      </div>
+
+      <div class="card" id="writeCard" style="display:none;">
+        <h2 class="section-title">오늘의 무순 관찰 기록</h2>
+        <form onsubmit="return false;">
+          <label>사진 촬영 (1장)</label>
+          <input type="file" id="photoInput" accept="image/*" capture="environment" onchange="onPhotoSelected(event)">
+          <img id="photoPreview" class="photo-preview" alt="미리보기">
+
+          <label for="didWork">식물에게 해준 일</label>
+          <textarea id="didWork" maxlength="500" placeholder="예: 물을 흠뻑 주었다." oninput="updateCount('didWork')"></textarea>
+          <div class="char-count" id="countDidWork">0 / 500자</div>
+
+          <label for="observation">관찰 내용</label>
+          <textarea id="observation" maxlength="500" placeholder="예: 어제보다 줄기가 1cm 더 자랐다." oninput="updateCount('observation')"></textarea>
+          <div class="char-count" id="countObservation">0 / 500자</div>
+
+          <label for="feeling">생각이나 느낌</label>
+          <textarea id="feeling" maxlength="500" placeholder="예: 무순이 쑥쑥 자라서 신기했다." oninput="updateCount('feeling')"></textarea>
+          <div class="char-count" id="countFeeling">0 / 500자</div>
+
+          <button type="button" class="block" id="submitBtn" onclick="doSubmit()">오늘의 기록 제출하기</button>
+        </form>
+        <div id="writeMsg" class="msg hidden"></div>
+      </div>
+    </div>
+
+    <!-- 나의 기록 -->
+    <div id="paneMine" style="display:none;">
+      <div class="card">
+        <h2 class="section-title">나의 관찰 기록</h2>
+        <div id="mineList"><div class="empty">불러오는 중...</div></div>
+      </div>
+    </div>
+
+    <!-- 같은 반 기록 -->
+    <div id="paneClass" style="display:none;">
+      <div class="card">
+        <h2 class="section-title">같은 반 친구들의 기록</h2>
+        <div id="classList"><div class="empty">불러오는 중...</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="spinner-overlay hidden" id="spinner"><div class="spinner"></div></div>
+
+  <?!= include('SharedScript'); ?>
+  <script>
+    var session = getSession();
+    var pendingPhoto = null; // {base64, mime}
+
+    (function init() {
+      if (!session || session.role !== 'student') { goToPage('login'); return; }
+      document.getElementById('whoami').textContent = session.class + ' ' + session.name + ' 학생';
+      checkTodayStatus();
+    })();
+
+    function switchTab(tab) {
+      document.getElementById('paneWrite').style.display = tab === 'write' ? 'block' : 'none';
+      document.getElementById('paneMine').style.display = tab === 'mine' ? 'block' : 'none';
+      document.getElementById('paneClass').style.display = tab === 'class' ? 'block' : 'none';
+      document.getElementById('tabWrite').classList.toggle('active', tab === 'write');
+      document.getElementById('tabMine').classList.toggle('active', tab === 'mine');
+      document.getElementById('tabClass').classList.toggle('active', tab === 'class');
+      if (tab === 'mine') loadMine();
+      if (tab === 'class') loadClass();
+    }
+
+    async function checkTodayStatus() {
+      showSpinner(true);
+      try {
+        var res = await runServer('hasSubmittedToday', session.studentId);
+        showSpinner(false);
+        if (res.success && res.submitted) {
+          document.getElementById('alreadyDoneCard').style.display = 'block';
+          document.getElementById('writeCard').style.display = 'none';
+        } else {
+          document.getElementById('alreadyDoneCard').style.display = 'none';
+          document.getElementById('writeCard').style.display = 'block';
+        }
+      } catch (e) {
+        showSpinner(false);
+        document.getElementById('writeCard').style.display = 'block';
+      }
+    }
+
+    function updateCount(field) {
+      var el = document.getElementById(field);
+      var countEl = document.getElementById('count' + field.charAt(0).toUpperCase() + field.slice(1));
+      var len = el.value.length;
+      countEl.textContent = len + ' / 500자';
+      countEl.classList.toggle('over', len >= 500);
+    }
+
+    async function onPhotoSelected(evt) {
+      var file = evt.target.files[0];
+      if (!file) return;
+      showSpinner(true);
+      try {
+        pendingPhoto = await compressImageToBase64(file);
+        var preview = document.getElementById('photoPreview');
+        preview.src = 'data:' + pendingPhoto.mime + ';base64,' + pendingPhoto.base64;
+        preview.classList.add('show');
+      } catch (e) {
+        showMsg(document.getElementById('writeMsg'), '사진 처리 중 오류: ' + e.message);
+      }
+      showSpinner(false);
+    }
+
+    async function doSubmit() {
+      var msg = document.getElementById('writeMsg');
+      hideMsg(msg);
+
+      if (!pendingPhoto) { showMsg(msg, '오늘의 사진을 먼저 촬영해주세요.'); return; }
+
+      var payload = {
+        studentId: session.studentId,
+        photoBase64: pendingPhoto.base64,
+        photoMime: pendingPhoto.mime,
+        didWork: document.getElementById('didWork').value.trim(),
+        observation: document.getElementById('observation').value.trim(),
+        feeling: document.getElementById('feeling').value.trim()
+      };
+
+      if (!payload.didWork || !payload.observation || !payload.feeling) {
+        showMsg(msg, '네 가지 항목을 모두 작성해주세요.');
+        return;
+      }
+
+      document.getElementById('submitBtn').disabled = true;
+      showSpinner(true);
+      try {
+        var res = await runServer('submitRecord', payload);
+        showSpinner(false);
+        if (res.success) {
+          showMsg(msg, '오늘의 기록이 제출되었습니다!', 'success');
+          setTimeout(checkTodayStatus, 800);
+        } else {
+          showMsg(msg, res.message || '제출에 실패했습니다.');
+          document.getElementById('submitBtn').disabled = false;
+        }
+      } catch (e) {
+        showSpinner(false);
+        showMsg(msg, '오류가 발생했습니다: ' + e.message);
+        document.getElementById('submitBtn').disabled = false;
+      }
+    }
+
+    function renderRecordList(container, records, showName) {
+      if (!records || records.length === 0) {
+        container.innerHTML = '<div class="empty">아직 기록이 없습니다.</div>';
+        return;
+      }
+      container.innerHTML = records
+        .map(function (r) {
+          var photoHtml = r.photoUrl
+            ? '<img class="photo" src="' + escapeHtml(r.photoUrl) + '" alt="관찰 사진">'
+            : '';
+          var whoHtml = showName ? '<span class="who">' + escapeHtml(r.class) + ' ' + escapeHtml(r.name) + '</span>' : '';
+          return (
+            '<div class="record-item">' +
+            '<span class="date-badge">' + escapeHtml(r.date) + '</span>' + whoHtml +
+            photoHtml +
+            '<dl>' +
+            '<dt>식물에게 해준 일</dt><dd>' + escapeHtml(r.didWork) + '</dd>' +
+            '<dt>관찰 내용</dt><dd>' + escapeHtml(r.observation) + '</dd>' +
+            '<dt>생각이나 느낌</dt><dd>' + escapeHtml(r.feeling) + '</dd>' +
+            '</dl>' +
+            '</div>'
+          );
+        })
+        .join('');
+    }
+
+    async function loadMine() {
+      var container = document.getElementById('mineList');
+      container.innerHTML = '<div class="empty">불러오는 중...</div>';
+      try {
+        var records = await runServer('getMyRecords', session.studentId);
+        renderRecordList(container, records, false);
+      } catch (e) {
+        container.innerHTML = '<div class="empty">기록을 불러오지 못했습니다.</div>';
+      }
+    }
+
+    async function loadClass() {
+      var container = document.getElementById('classList');
+      container.innerHTML = '<div class="empty">불러오는 중...</div>';
+      try {
+        var records = await runServer('getClassRecords', session.studentId);
+        renderRecordList(container, records, true);
+      } catch (e) {
+        container.innerHTML = '<div class="empty">기록을 불러오지 못했습니다.</div>';
+      }
+    }
+  </script>
+</body>
+</html>

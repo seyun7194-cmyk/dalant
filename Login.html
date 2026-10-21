@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <script>var APP_URL = "<?= appUrl ?>";</script>
+  <?!= include('Stylesheet'); ?>
+</head>
+<body>
+  <div class="wrap" style="padding-top:48px;">
+    <div style="text-align:center; margin-bottom:24px;">
+      <div style="font-size:40px;">🌱</div>
+      <h1 style="color:#1b5e20; margin:8px 0 0;">무순 키우기 관찰기</h1>
+      <p style="color:#666; font-size:14px; margin-top:4px;">매일매일 무순을 관찰하고 기록해요</p>
+    </div>
+
+    <div class="tabs">
+      <button id="tabStudent" class="active" onclick="switchRole('student')">학생</button>
+      <button id="tabTeacher" onclick="switchRole('teacher')">교사</button>
+    </div>
+
+    <!-- 학생 로그인 -->
+    <div class="card" id="studentPane">
+      <h2 class="section-title">학생 로그인</h2>
+      <form id="studentLoginForm" onsubmit="return false;">
+        <label for="sId">학생 ID</label>
+        <input type="text" id="sId" autocomplete="username" placeholder="선생님이 알려주신 ID">
+        <label for="sPw">비밀번호</label>
+        <input type="password" id="sPw" autocomplete="current-password" placeholder="비밀번호">
+        <button type="button" class="block" onclick="doStudentLogin()">로그인</button>
+      </form>
+      <div id="studentMsg" class="msg hidden"></div>
+      <p class="hint" style="text-align:center; margin-top:14px;">계정이 없다면 담임 선생님께 등록을 요청하세요.</p>
+    </div>
+
+    <!-- 교사 로그인 / 회원가입 -->
+    <div class="card" id="teacherPane" style="display:none;">
+      <div id="teacherLoginBlock">
+        <h2 class="section-title">교사 로그인</h2>
+        <form onsubmit="return false;">
+          <label for="tId">교사 ID</label>
+          <input type="text" id="tId" autocomplete="username">
+          <label for="tPw">비밀번호</label>
+          <input type="password" id="tPw" autocomplete="current-password">
+          <button type="button" class="block" onclick="doTeacherLogin()">로그인</button>
+        </form>
+        <div id="teacherLoginMsg" class="msg hidden"></div>
+        <span class="toggle-link" onclick="toggleTeacherForm(true)">처음이신가요? 교사 회원가입</span>
+      </div>
+
+      <div id="teacherRegisterBlock" style="display:none;">
+        <h2 class="section-title">교사 회원가입</h2>
+        <p class="hint">회원가입 시 이 교사만을 위한 구글 시트가 자동으로 생성됩니다.</p>
+        <form onsubmit="return false;">
+          <label for="rName">이름</label>
+          <input type="text" id="rName" placeholder="예: 김민지">
+          <label for="rSchool">학교 (선택)</label>
+          <input type="text" id="rSchool" placeholder="예: 사랑초등학교">
+          <label for="rId">사용할 교사 ID</label>
+          <input type="text" id="rId" autocomplete="username">
+          <label for="rPw">사용할 비밀번호</label>
+          <input type="password" id="rPw" autocomplete="new-password">
+          <button type="button" class="block" onclick="doTeacherRegister()">회원가입 및 시트 생성</button>
+        </form>
+        <div id="teacherRegisterMsg" class="msg hidden"></div>
+        <span class="toggle-link" onclick="toggleTeacherForm(false)">이미 계정이 있어요, 로그인할래요</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="spinner-overlay hidden" id="spinner"><div class="spinner"></div></div>
+
+  <?!= include('SharedScript'); ?>
+  <script>
+    // 이미 로그인 세션이 있으면 바로 해당 화면으로 이동
+    (function () {
+      var session = getSession();
+      if (session && session.role === 'student') goToPage('student');
+      if (session && session.role === 'teacher') goToPage('teacher');
+    })();
+
+    function switchRole(role) {
+      document.getElementById('studentPane').style.display = role === 'student' ? 'block' : 'none';
+      document.getElementById('teacherPane').style.display = role === 'teacher' ? 'block' : 'none';
+      document.getElementById('tabStudent').classList.toggle('active', role === 'student');
+      document.getElementById('tabTeacher').classList.toggle('active', role === 'teacher');
+    }
+
+    function toggleTeacherForm(showRegister) {
+      document.getElementById('teacherLoginBlock').style.display = showRegister ? 'none' : 'block';
+      document.getElementById('teacherRegisterBlock').style.display = showRegister ? 'block' : 'none';
+    }
+
+    async function doStudentLogin() {
+      var msg = document.getElementById('studentMsg');
+      hideMsg(msg);
+      var id = document.getElementById('sId').value.trim();
+      var pw = document.getElementById('sPw').value;
+      if (!id || !pw) { showMsg(msg, 'ID와 비밀번호를 입력해주세요.'); return; }
+
+      showSpinner(true);
+      try {
+        var res = await runServer('loginStudent', id, pw);
+        showSpinner(false);
+        if (res.success) {
+          setSession({ role: 'student', studentId: res.studentId, name: res.name, class: res.class, teacherId: res.teacherId });
+          goToPage('student');
+        } else {
+          showMsg(msg, res.message || '로그인에 실패했습니다.');
+        }
+      } catch (e) {
+        showSpinner(false);
+        showMsg(msg, '오류가 발생했습니다: ' + e.message);
+      }
+    }
+
+    async function doTeacherLogin() {
+      var msg = document.getElementById('teacherLoginMsg');
+      hideMsg(msg);
+      var id = document.getElementById('tId').value.trim();
+      var pw = document.getElementById('tPw').value;
+      if (!id || !pw) { showMsg(msg, 'ID와 비밀번호를 입력해주세요.'); return; }
+
+      showSpinner(true);
+      try {
+        var res = await runServer('loginTeacher', id, pw);
+        showSpinner(false);
+        if (res.success) {
+          setSession({ role: 'teacher', teacherId: res.teacherId, name: res.name, sheetUrl: res.sheetUrl });
+          goToPage('teacher');
+        } else {
+          showMsg(msg, res.message || '로그인에 실패했습니다.');
+        }
+      } catch (e) {
+        showSpinner(false);
+        showMsg(msg, '오류가 발생했습니다: ' + e.message);
+      }
+    }
+
+    async function doTeacherRegister() {
+      var msg = document.getElementById('teacherRegisterMsg');
+      hideMsg(msg);
+      var payload = {
+        name: document.getElementById('rName').value.trim(),
+        school: document.getElementById('rSchool').value.trim(),
+        teacherId: document.getElementById('rId').value.trim(),
+        password: document.getElementById('rPw').value
+      };
+      if (!payload.name || !payload.teacherId || !payload.password) {
+        showMsg(msg, '이름, ID, 비밀번호를 모두 입력해주세요.');
+        return;
+      }
+
+      showSpinner(true);
+      try {
+        var res = await runServer('registerTeacher', payload);
+        showSpinner(false);
+        if (res.success) {
+          showMsg(msg, '회원가입이 완료되었습니다! 이제 로그인해주세요.', 'success');
+          toggleTeacherForm(false);
+          document.getElementById('tId').value = payload.teacherId;
+        } else {
+          showMsg(msg, res.message || '회원가입에 실패했습니다.');
+        }
+      } catch (e) {
+        showSpinner(false);
+        showMsg(msg, '오류가 발생했습니다: ' + e.message);
+      }
+    }
+  </script>
+</body>
+</html>

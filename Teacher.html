@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <script>var APP_URL = "<?= appUrl ?>";</script>
+  <?!= include('Stylesheet'); ?>
+</head>
+<body>
+  <header class="appbar">
+    <h1>🌱 무순 관찰 일지 - 교사</h1>
+    <div class="user-info">
+      <span id="whoami"></span>
+      <button class="logout" onclick="logout()">로그아웃</button>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="card">
+      <h2 class="section-title">우리 반 구글 시트</h2>
+      <p class="hint">학생들이 제출한 모든 기록이 아래 구글 시트에 자동으로 쌓입니다.</p>
+      <a class="btn" id="sheetLink" href="#" target="_top">📊 구글 시트 열기</a>
+    </div>
+
+    <div class="card">
+      <h2 class="section-title">오늘 제출 현황</h2>
+      <div id="dashboardList"><div class="empty">불러오는 중...</div></div>
+    </div>
+
+    <div class="card">
+      <h2 class="section-title">학생 계정 개별 등록</h2>
+      <form onsubmit="return false;">
+        <label for="newId">학생 ID</label>
+        <input type="text" id="newId" placeholder="예: 2026601 (학년반번호 등 자유롭게)">
+        <label for="newPw">비밀번호</label>
+        <input type="text" id="newPw" placeholder="학생이 기억하기 쉬운 간단한 비밀번호">
+        <label for="newName">이름</label>
+        <input type="text" id="newName" placeholder="예: 홍길동">
+        <label for="newClass">반</label>
+        <input type="text" id="newClass" placeholder="예: 6학년 1반">
+        <button type="button" class="block" onclick="doAddStudent()">학생 등록</button>
+      </form>
+      <div id="addMsg" class="msg hidden"></div>
+    </div>
+
+    <div class="card">
+      <h2 class="section-title">학생 계정 일괄 등록</h2>
+      <p class="hint">한 줄에 한 명씩, <b>학생ID,비밀번호,이름,반</b> 순서로 쉼표(,)로 구분해 입력하세요.<br>예) 2026601,1234,홍길동,6학년 1반</p>
+      <textarea id="bulkText" style="min-height:140px;" placeholder="2026601,1234,홍길동,6학년 1반&#10;2026602,1234,김민지,6학년 1반"></textarea>
+      <button class="block" onclick="doBulkAdd()">일괄 등록</button>
+      <div id="bulkMsg" class="msg hidden"></div>
+    </div>
+  </div>
+
+  <div class="spinner-overlay hidden" id="spinner"><div class="spinner"></div></div>
+
+  <?!= include('SharedScript'); ?>
+  <script>
+    var session = getSession();
+
+    (function init() {
+      if (!session || session.role !== 'teacher') { goToPage('login'); return; }
+      document.getElementById('whoami').textContent = session.name + ' 선생님';
+      document.getElementById('sheetLink').href = session.sheetUrl || '#';
+      loadDashboard();
+    })();
+
+    async function loadDashboard() {
+      var container = document.getElementById('dashboardList');
+      try {
+        var data = await runServer('getTeacherDashboard', session.teacherId);
+        if (data.sheetUrl) document.getElementById('sheetLink').href = data.sheetUrl;
+
+        if (!data.students || data.students.length === 0) {
+          container.innerHTML = '<div class="empty">아직 등록된 학생이 없습니다. 아래에서 학생을 등록해주세요.</div>';
+          return;
+        }
+
+        var rows = data.students
+          .map(function (s) {
+            var status = s.submittedToday
+              ? '<span class="badge-ok">제출 완료 ✅</span>'
+              : '<span class="badge-no">미제출</span>';
+            return (
+              '<tr><td>' + escapeHtml(s.class) + '</td><td>' + escapeHtml(s.name) +
+              '</td><td>' + escapeHtml(s.studentId) + '</td><td>' + status + '</td></tr>'
+            );
+          })
+          .join('');
+
+        container.innerHTML =
+          '<table class="roster"><thead><tr><th>반</th><th>이름</th><th>학생ID</th><th>오늘 상태</th></tr></thead><tbody>' +
+          rows +
+          '</tbody></table>';
+      } catch (e) {
+        container.innerHTML = '<div class="empty">현황을 불러오지 못했습니다: ' + e.message + '</div>';
+      }
+    }
+
+    async function doAddStudent() {
+      var msg = document.getElementById('addMsg');
+      hideMsg(msg);
+      var info = {
+        studentId: document.getElementById('newId').value.trim(),
+        password: document.getElementById('newPw').value.trim(),
+        name: document.getElementById('newName').value.trim(),
+        class: document.getElementById('newClass').value.trim()
+      };
+      if (!info.studentId || !info.password || !info.name) {
+        showMsg(msg, '학생 ID, 비밀번호, 이름을 입력해주세요.');
+        return;
+      }
+      showSpinner(true);
+      try {
+        var res = await runServer('addStudent', session.teacherId, info);
+        showSpinner(false);
+        if (res.success) {
+          showMsg(msg, info.name + ' 학생이 등록되었습니다.', 'success');
+          document.getElementById('newId').value = '';
+          document.getElementById('newPw').value = '';
+          document.getElementById('newName').value = '';
+          document.getElementById('newClass').value = '';
+          loadDashboard();
+        } else {
+          showMsg(msg, res.message || '등록에 실패했습니다.');
+        }
+      } catch (e) {
+        showSpinner(false);
+        showMsg(msg, '오류가 발생했습니다: ' + e.message);
+      }
+    }
+
+    function parseBulkText(text) {
+      return text
+        .split('\n')
+        .map(function (line) { return line.trim(); })
+        .filter(function (line) { return line.length > 0; })
+        .map(function (line) {
+          var parts = line.split(',').map(function (p) { return p.trim(); });
+          return { studentId: parts[0], password: parts[1], name: parts[2], class: parts[3] || '' };
+        });
+    }
+
+    async function doBulkAdd() {
+      var msg = document.getElementById('bulkMsg');
+      hideMsg(msg);
+      var text = document.getElementById('bulkText').value;
+      var rows = parseBulkText(text);
+      if (rows.length === 0) {
+        showMsg(msg, '등록할 학생 정보를 입력해주세요.');
+        return;
+      }
+      var invalid = rows.filter(function (r) { return !r.studentId || !r.password || !r.name; });
+      if (invalid.length > 0) {
+        showMsg(msg, '형식이 올바르지 않은 줄이 있습니다. "학생ID,비밀번호,이름,반" 형식을 확인해주세요.');
+        return;
+      }
+
+      showSpinner(true);
+      try {
+        var results = await runServer('bulkAddStudents', session.teacherId, rows);
+        showSpinner(false);
+        var success = results.filter(function (r) { return r.success; }).length;
+        var fail = results.filter(function (r) { return !r.success; });
+        var text2 = success + '명 등록 완료.';
+        if (fail.length > 0) {
+          text2 += ' 실패 ' + fail.length + '건: ' + fail.map(function (f) { return f.studentId + '(' + f.message + ')'; }).join(', ');
+          showMsg(msg, text2, fail.length === results.length ? 'error' : 'success');
+        } else {
+          showMsg(msg, text2, 'success');
+          document.getElementById('bulkText').value = '';
+        }
+        loadDashboard();
+      } catch (e) {
+        showSpinner(false);
+        showMsg(msg, '오류가 발생했습니다: ' + e.message);
+      }
+    }
+  </script>
+</body>
+</html>
