@@ -1,7 +1,0 @@
-{
-  "functions": {
-    "api/rpc.js": {
-      "maxDuration": 30
-    }
-  }
-}
